@@ -23,19 +23,55 @@
             overflow-y: auto;
         }
 
-        .legend-item {
-            margin-bottom: 12px;
-        }
+        .legend-item { margin-bottom: 12px; }
+        .legend-item img { display: block; margin-top: 5px; max-width: 100%; height: auto; }
+        .opacity-slider { width: 100%; }
 
-        .legend-item img {
-            display: block;
-            margin-top: 5px;
-            max-width: 100%;
-            height: auto;
+        .search-control {
+            background: white;
+            padding: 10px;
+            border-radius: 6px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.3);
+            width: 250px;
+            position: relative;
         }
-
-        .opacity-slider {
+        .search-input {
             width: 100%;
+            padding: 5px;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .search-results {
+            max-height: 200px;
+            overflow-y: auto;
+            border-top: 1px solid #eee;
+            margin-top: 5px;
+            display: none;
+            background: white;
+        }
+        .result-item {
+            padding: 5px;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 13px;
+        }
+        .result-item:hover { background-color: #f0f0f0; }
+        .result-item small { color: #888; display: block; font-size: 10px; }
+
+        .measure-control {
+            background: white;
+            padding: 5px 10px;
+            border-radius: 6px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.3);
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            text-align: center;
+        }
+        .measure-active {
+            background-color: #90EE90;
+            border: 2px solid green;
         }
     </style>
 </head>
@@ -106,6 +142,191 @@
 
     L.control.layers(baseMaps, overlayMaps, { collapsed: false }).addTo(map);
 
+    // ==========================================================
+    // 1. FITUR SEARCH BAR
+    // ==========================================================
+
+    var searchData = [];
+    var wfsSchoolUrl = "http://localhost:8080/geoserver/uas_kota_malang/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=uas_kota_malang:school_kota_malang&outputFormat=application/json";
+    var wfsHospitalUrl = "http://localhost:8080/geoserver/uas_kota_malang/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=uas_kota_malang:hospital_kota_malang&outputFormat=application/json";
+
+    Promise.all([
+        fetch(wfsSchoolUrl).then(res => res.json()),
+        fetch(wfsHospitalUrl).then(res => res.json())
+    ]).then(([schoolData, hospitalData]) => {
+        schoolData.features.forEach(f => {
+            if(f.geometry && f.properties.name) {
+                searchData.push({ name: f.properties.name, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], type: "Sekolah" });
+            }
+        });
+        hospitalData.features.forEach(f => {
+            if(f.geometry && f.properties.name) {
+                searchData.push({ name: f.properties.name, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], type: "Faskes" });
+            }
+        });
+    }).catch(err => console.log("Gagal load search data."));
+
+    var searchControl = L.control({ position: "topleft" });
+    searchControl.onAdd = function() {
+        var div = L.DomUtil.create("div", "search-control");
+        L.DomEvent.disableScrollPropagation(div);
+        L.DomEvent.disableClickPropagation(div);
+        div.innerHTML = `<input type="text" id="searchInput" class="search-input" placeholder="Cari Sekolah / Faskes..."><div id="searchResults" class="search-results"></div>`;
+        return div;
+    };
+    searchControl.addTo(map);
+
+    document.addEventListener("keyup", function(e) {
+        if(e.target && e.target.id == "searchInput") {
+            var keyword = e.target.value.toLowerCase();
+            var resultsDiv = document.getElementById("searchResults");
+            resultsDiv.innerHTML = "";
+            
+            if(keyword.length < 3) { resultsDiv.style.display = "none"; return; }
+
+            var filtered = searchData.filter(item => item.name.toLowerCase().includes(keyword));
+
+            if(filtered.length > 0) {
+                resultsDiv.style.display = "block";
+                filtered.slice(0, 10).forEach(item => {
+                    var div = document.createElement("div");
+                    div.className = "result-item";
+                    div.innerHTML = `<strong>${item.name}</strong><small>${item.type}</small>`;
+                    div.onclick = function() {
+                        map.setView([item.lat, item.lng], 17);
+                        L.popup().setLatLng([item.lat, item.lng]).setContent(`<b>${item.name}</b><br>${item.type}`).openOn(map);
+                        resultsDiv.style.display = "none";
+                    };
+                    resultsDiv.appendChild(div);
+                });
+            } else { resultsDiv.style.display = "none"; }
+        }
+    });
+
+    // ==========================================================
+    // 2. FITUR HITUNG JARAK (DIPERBAIKI)
+    // ==========================================================
+    
+    var measureControl = L.control({ position: 'topleft' });
+    var isMeasuring = false;
+    var measurePoints = [];
+    var measureLine = null;
+    var measureMarkers = [];
+
+    measureControl.onAdd = function(map) {
+        var div = L.DomUtil.create('div', 'measure-control');
+        
+        // --- PERBAIKAN: Mencegah klik tombol tembus ke peta ---
+        L.DomEvent.disableClickPropagation(div);
+        L.DomEvent.disableScrollPropagation(div);
+        // -----------------------------------------------------
+
+        div.innerHTML = "📏 Hitung Jarak";
+        div.onclick = function() {
+            isMeasuring = !isMeasuring;
+            if (isMeasuring) {
+                div.classList.add("measure-active");
+                div.innerHTML = "❌ Stop Ukur";
+                map.getContainer().style.cursor = "crosshair";
+                resetMeasure(); // Reset saat tombol diaktifkan
+            } else {
+                resetMeasure();
+                div.classList.remove("measure-active");
+                div.innerHTML = "📏 Hitung Jarak";
+                map.getContainer().style.cursor = "";
+            }
+        };
+        return div;
+    };
+    measureControl.addTo(map);
+
+    function resetMeasure() {
+        measurePoints = [];
+        if (measureLine) map.removeLayer(measureLine);
+        measureMarkers.forEach(m => map.removeLayer(m));
+        measureMarkers = [];
+    }
+
+    // ==========================================================
+    // LOGIKA CLICK (Measure & Popup)
+    // ==========================================================
+
+    map.on("click", function (e) {
+
+        // A. MODE UKUR JARAK
+        if (isMeasuring) {
+            // Jika sudah ada 2 titik (dari pengukuran sebelumnya), reset dulu baru mulai lagi
+            if (measurePoints.length >= 2) {
+                resetMeasure();
+            }
+
+            var latlng = e.latlng;
+            var marker = L.circleMarker(latlng, {color: 'red', radius: 5}).addTo(map);
+            measureMarkers.push(marker);
+            measurePoints.push(latlng);
+
+            // Jika sudah mencapai 2 titik, tarik garis dan hitung
+            if (measurePoints.length === 2) {
+                // Gambar garis
+                measureLine = L.polyline(measurePoints, {color: 'red', weight: 3, dashArray: '5, 10'}).addTo(map);
+
+                // Hitung Jarak
+                var distance = map.distance(measurePoints[0], measurePoints[1]);
+                var km = (distance / 1000).toFixed(2);
+
+                // Tampilkan Popup di titik kedua
+                L.popup()
+                    .setLatLng(latlng)
+                    .setContent(`<b>Jarak: ${km} km</b>`)
+                    .openOn(map);
+            }
+            return; // Stop disini, jangan buka popup info WMS
+        }
+
+        // B. MODE NORMAL (WMS POPUP)
+        var targetLayers = [
+            "uas_kota_malang:school_kota_malang",
+            "uas_kota_malang:hospital_kota_malang",
+            "uas_kota_malang:kecamatan_kota_malang",
+            "uas_kota_malang:kelurahan_kota_malang"
+        ].join(",");
+
+        var url = getFeatureInfoUrl(wmsUrl, targetLayers, e.latlng, {
+            info_format: "application/json",
+            feature_count: 1
+        });
+
+        fetch(url)
+            .then(res => res.json())
+            .then(data => {
+                if (!data.features.length) return;
+
+                var f = data.features[0];
+                var p = f.properties;
+                var id = f.id; 
+
+                var content = "";
+
+                if (id.includes("school")) {
+                    content += `<b>Nama Sekolah:</b> ${p['name'] || '-'} <br>`;
+                    content += `<b>Alamat:</b> ${p['addr:stree'] || p['addr_stree'] || '-'} <br>`; 
+                }
+                else if (id.includes("hospital")) {
+                    content += `<b>Nama Faskes:</b> ${p['name'] || '-'} <br>`;
+                    content += `<b>Alamat:</b> ${p['addr_house'] || p['addr:stree'] || '-'} <br>`;
+                }
+                else if (p['NAMOBJ']) {
+                    content += `<b>Wilayah:</b> ${p['NAMOBJ']} <br>`;
+                } 
+                else {
+                      content += `<b>Info:</b> ${p['NAMOBJ'] || p['name'] || 'Data tidak tersedia'} <br>`;
+                }
+
+                L.popup().setLatLng(e.latlng).setContent(content).openOn(map);
+            })
+            .catch(err => console.error("Gagal mengambil info:", err));
+    });
+
     var legend = L.control({ position: "topleft" });
 
     legend.onAdd = function () {
@@ -164,38 +385,6 @@
     };
 
     opacityControl.addTo(map);
-
-    map.on("click", function (e) {
-
-        var targetLayers = [
-            "uas_kota_malang:school_kota_malang",
-            "uas_kota_malang:hospital_kota_malang",
-            "uas_kota_malang:kecamatan_kota_malang",
-            "uas_kota_malang:kelurahan_kota_malang"
-        ].join(",");
-
-        var url = getFeatureInfoUrl(wmsUrl, targetLayers, e.latlng, {
-            info_format: "application/json",
-            feature_count: 10
-        });
-
-        fetch(url)
-            .then(res => res.json())
-            .then(data => {
-                if (!data.features.length) return;
-
-                var f = data.features[0];
-                var p = f.properties;
-
-                var html = "<b>Info</b><br>";
-
-                Object.keys(p).forEach(k => {
-                    html += `<b>${k}</b>: ${p[k]}<br>`;
-                });
-
-                L.popup().setLatLng(e.latlng).setContent(html).openOn(map);
-            });
-    });
 
     function getFeatureInfoUrl(baseUrl, layers, latlng, params) {
         var point = map.latLngToContainerPoint(latlng, map.getZoom());
