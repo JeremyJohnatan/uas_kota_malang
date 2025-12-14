@@ -1,0 +1,15 @@
+.git
+.gitignore
+*.md
+.DS_Store
+.env.example
+qgis/*.gpkg
+qgis/*.shp
+qgis/*.shx
+qgis/*.dbf
+qgis/*.prj
+qgis/*.cpg
+qgis/*.qmd
+node_modules
+*.log
+.vscode

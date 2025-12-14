@@ -1,0 +1,5 @@
+geoserver
+pg
+.DS_Store
+.env
+.vscode

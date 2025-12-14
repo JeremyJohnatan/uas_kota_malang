@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGIS Fasilitas Publik Kota Malang</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+
+        .legend-control {
+            background: white;
+            padding: 10px;
+            font-size: 14px;
+            line-height: 20px;
+            border-radius: 6px;
+            box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
+            min-width: 220px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .legend-item {
+            margin-bottom: 12px;
+        }
+
+        .legend-item img {
+            display: block;
+            margin-top: 5px;
+            max-width: 100%;
+            height: auto;
+        }
+
+        .opacity-slider {
+            width: 100%;
+        }
+
+        .search-control {
+            background: white;
+            padding: 10px;
+            border-radius: 6px;
+            box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
+            width: 250px;
+            position: relative;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 5px;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        .search-results {
+            max-height: 200px;
+            overflow-y: auto;
+            border-top: 1px solid #eee;
+            margin-top: 5px;
+            display: none;
+            background: white;
+        }
+
+        .result-item {
+            padding: 5px;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 13px;
+        }
+
+        .result-item:hover {
+            background-color: #f0f0f0;
+        }
+
+        .result-item small {
+            color: #888;
+            display: block;
+            font-size: 10px;
+        }
+
+        .measure-control {
+            background: white;
+            padding: 5px 10px;
+            border-radius: 6px;
+            box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .measure-active {
+            background-color: #90EE90;
+            border: 2px solid green;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+
+        var map = L.map('map').setView([-7.9666, 112.6326], 13);
+
+        var osm = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap © CARTO'
+        }).addTo(map);
+
+        var googleStreets = L.tileLayer(
+            'https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+            {
+                maxZoom: 20,
+                subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+            }
+        );
+
+        var wmsUrl = "/geoserver/wms";
+
+        function wmsLayer(layerName, opacity = 1) {
+            return L.tileLayer.wms(wmsUrl, {
+                layers: layerName,
+                format: "image/png",
+                transparent: true,
+                version: "1.1.0",
+                opacity: opacity
+            });
+        }
+
+        var layerKota = wmsLayer("uas_kota_malang:kota_malang");
+        var layerKecamatan = wmsLayer("uas_kota_malang:kecamatan_kota_malang");
+        var layerKelurahan = wmsLayer("uas_kota_malang:kelurahan_kota_malang");
+
+        var radiusSekolah = wmsLayer("uas_kota_malang:radius_sekolah1", 0.7);
+        var radiusRS = wmsLayer("uas_kota_malang:radius_rumah_sakit", 0.7);
+
+        var titikSekolah = wmsLayer("uas_kota_malang:school_kota_malang");
+        var titikRS = wmsLayer("uas_kota_malang:hospital_kota_malang");
+
+        layerKota.addTo(map);
+        layerKecamatan.addTo(map);
+        layerKelurahan.addTo(map);
+        radiusSekolah.addTo(map);
+        radiusRS.addTo(map);
+        titikSekolah.addTo(map);
+        titikRS.addTo(map);
+
+        var baseMaps = {
+            "OpenStreetMap": osm,
+            "Google Maps (Jalan)": googleStreets
+        };
+
+        var overlayMaps = {
+            "Batas Kota Malang": layerKota,
+            "Batas Kecamatan": layerKecamatan,
+            "Batas Kelurahan": layerKelurahan,
+            "Radius Sekolah": radiusSekolah,
+            "Radius Rumah Sakit": radiusRS,
+            "Lokasi Sekolah": titikSekolah,
+            "Lokasi RS/Faskes": titikRS
+        };
+
+        L.control.layers(baseMaps, overlayMaps, { collapsed: false }).addTo(map);
+
+        // ==========================================================
+        // 1. FITUR SEARCH BAR
+        // ==========================================================
+
+        var searchData = [];
+        var wfsSchoolUrl = "/geoserver/uas_kota_malang/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=uas_kota_malang:school_kota_malang&outputFormat=application/json";
+        var wfsHospitalUrl = "/geoserver/uas_kota_malang/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=uas_kota_malang:hospital_kota_malang&outputFormat=application/json";
+
+        Promise.all([
+            fetch(wfsSchoolUrl).then(res => res.json()),
+            fetch(wfsHospitalUrl).then(res => res.json())
+        ]).then(([schoolData, hospitalData]) => {
+            schoolData.features.forEach(f => {
+                if (f.geometry && f.properties.name) {
+                    searchData.push({ name: f.properties.name, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], type: "Sekolah" });
+                }
+            });
+            hospitalData.features.forEach(f => {
+                if (f.geometry && f.properties.name) {
+                    searchData.push({ name: f.properties.name, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], type: "Faskes" });
+                }
+            });
+        }).catch(err => console.log("Gagal load search data."));
+
+        var searchControl = L.control({ position: "topleft" });
+        searchControl.onAdd = function () {
+            var div = L.DomUtil.create("div", "search-control");
+            L.DomEvent.disableScrollPropagation(div);
+            L.DomEvent.disableClickPropagation(div);
+            div.innerHTML = `<input type="text" id="searchInput" class="search-input" placeholder="Cari Sekolah / Faskes..."><div id="searchResults" class="search-results"></div>`;
+            return div;
+        };
+        searchControl.addTo(map);
+
+        document.addEventListener("keyup", function (e) {
+            if (e.target && e.target.id == "searchInput") {
+                var keyword = e.target.value.toLowerCase();
+                var resultsDiv = document.getElementById("searchResults");
+                resultsDiv.innerHTML = "";
+
+                if (keyword.length < 3) { resultsDiv.style.display = "none"; return; }
+
+                var filtered = searchData.filter(item => item.name.toLowerCase().includes(keyword));
+
+                if (filtered.length > 0) {
+                    resultsDiv.style.display = "block";
+                    filtered.slice(0, 10).forEach(item => {
+                        var div = document.createElement("div");
+                        div.className = "result-item";
+                        div.innerHTML = `<strong>${item.name}</strong><small>${item.type}</small>`;
+                        div.onclick = function () {
+                            map.setView([item.lat, item.lng], 17);
+                            L.popup().setLatLng([item.lat, item.lng]).setContent(`<b>${item.name}</b><br>${item.type}`).openOn(map);
+                            resultsDiv.style.display = "none";
+                        };
+                        resultsDiv.appendChild(div);
+                    });
+                } else { resultsDiv.style.display = "none"; }
+            }
+        });
+
+        // ==========================================================
+        // 2. FITUR HITUNG JARAK (DIPERBAIKI)
+        // ==========================================================
+
+        var measureControl = L.control({ position: 'topleft' });
+        var isMeasuring = false;
+        var measurePoints = [];
+        var measureLine = null;
+        var measureMarkers = [];
+
+        measureControl.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'measure-control');
+
+            // --- PERBAIKAN: Mencegah klik tombol tembus ke peta ---
+            L.DomEvent.disableClickPropagation(div);
+            L.DomEvent.disableScrollPropagation(div);
+            // -----------------------------------------------------
+
+            div.innerHTML = "📏 Hitung Jarak";
+            div.onclick = function () {
+                isMeasuring = !isMeasuring;
+                if (isMeasuring) {
+                    div.classList.add("measure-active");
+                    div.innerHTML = "❌ Stop Ukur";
+                    map.getContainer().style.cursor = "crosshair";
+                    resetMeasure(); // Reset saat tombol diaktifkan
+                } else {
+                    resetMeasure();
+                    div.classList.remove("measure-active");
+                    div.innerHTML = "📏 Hitung Jarak";
+                    map.getContainer().style.cursor = "";
+                }
+            };
+            return div;
+        };
+        measureControl.addTo(map);
+
+        function resetMeasure() {
+            measurePoints = [];
+            if (measureLine) map.removeLayer(measureLine);
+            measureMarkers.forEach(m => map.removeLayer(m));
+            measureMarkers = [];
+        }
+
+        // ==========================================================
+        // LOGIKA CLICK (Measure & Popup)
+        // ==========================================================
+
+        map.on("click", function (e) {
+
+            // A. MODE UKUR JARAK
+            if (isMeasuring) {
+                // Jika sudah ada 2 titik (dari pengukuran sebelumnya), reset dulu baru mulai lagi
+                if (measurePoints.length >= 2) {
+                    resetMeasure();
+                }
+
+                var latlng = e.latlng;
+                var marker = L.circleMarker(latlng, { color: 'red', radius: 5 }).addTo(map);
+                measureMarkers.push(marker);
+                measurePoints.push(latlng);
+
+                // Jika sudah mencapai 2 titik, tarik garis dan hitung
+                if (measurePoints.length === 2) {
+                    // Gambar garis
+                    measureLine = L.polyline(measurePoints, { color: 'red', weight: 3, dashArray: '5, 10' }).addTo(map);
+
+                    // Hitung Jarak
+                    var distance = map.distance(measurePoints[0], measurePoints[1]);
+                    var km = (distance / 1000).toFixed(2);
+
+                    // Tampilkan Popup di titik kedua
+                    L.popup()
+                        .setLatLng(latlng)
+                        .setContent(`<b>Jarak: ${km} km</b>`)
+                        .openOn(map);
+                }
+                return; // Stop disini, jangan buka popup info WMS
+            }
+
+            // B. MODE NORMAL (WMS POPUP)
+            var targetLayers = [
+                "uas_kota_malang:school_kota_malang",
+                "uas_kota_malang:hospital_kota_malang",
+                "uas_kota_malang:kecamatan_kota_malang",
+                "uas_kota_malang:kelurahan_kota_malang"
+            ].join(",");
+
+            var url = getFeatureInfoUrl(wmsUrl, targetLayers, e.latlng, {
+                info_format: "application/json",
+                feature_count: 1
+            });
+
+            fetch(url)
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.features.length) return;
+
+                    var f = data.features[0];
+                    var p = f.properties;
+                    var id = f.id;
+
+                    var content = "";
+
+                    if (id.includes("school")) {
+                        content += `<b>Nama Sekolah:</b> ${p['name'] || '-'} <br>`;
+                        content += `<b>Alamat:</b> ${p['addr:stree'] || p['addr_stree'] || '-'} <br>`;
+                    }
+                    else if (id.includes("hospital")) {
+                        content += `<b>Nama Faskes:</b> ${p['name'] || '-'} <br>`;
+                        content += `<b>Alamat:</b> ${p['addr_house'] || p['addr:stree'] || '-'} <br>`;
+                    }
+                    else if (p['NAMOBJ']) {
+                        content += `<b>Wilayah:</b> ${p['NAMOBJ']} <br>`;
+                    }
+                    else {
+                        content += `<b>Info:</b> ${p['NAMOBJ'] || p['name'] || 'Data tidak tersedia'} <br>`;
+                    }
+
+                    L.popup().setLatLng(e.latlng).setContent(content).openOn(map);
+                })
+                .catch(err => console.error("Gagal mengambil info:", err));
+        });
+
+        var legend = L.control({ position: "topleft" });
+
+        legend.onAdd = function () {
+            var div = L.DomUtil.create("div", "legend-control");
+
+            L.DomEvent.disableScrollPropagation(div);
+            L.DomEvent.disableClickPropagation(div);
+
+            div.innerHTML = "<b>Legenda</b><br><hr style='margin: 5px 0;'>";
+
+            Object.keys(overlayMaps).forEach(layerName => {
+                let layer = overlayMaps[layerName];
+                let wmsName = layer.wmsParams.layers;
+
+                let legendUrl = `${wmsUrl}?service=WMS&request=GetLegendGraphic&format=image/png&layer=${wmsName}&transparent=true&LEGEND_OPTIONS=forceLabels:on;fontName:Arial;fontSize:11;fontAntiAliasing:true`;
+
+                div.innerHTML += `
+                <div class="legend-item">
+                    <strong>${layerName}</strong>
+                    <img src="${legendUrl}" alt="Legenda ${layerName}">
+                </div>
+            `;
+            });
+
+            return div;
+        };
+
+        legend.addTo(map);
+
+        var opacityControl = L.control({ position: "topright" });
+
+        opacityControl.onAdd = function () {
+            var div = L.DomUtil.create("div", "legend-control");
+
+            L.DomEvent.disableScrollPropagation(div);
+            L.DomEvent.disableClickPropagation(div);
+
+            div.innerHTML = "<b>Layer Opacity</b><br>";
+
+            Object.keys(overlayMaps).forEach(layerName => {
+                let layer = overlayMaps[layerName];
+                let id = layerName.replace(/\s+/g, "_");
+
+                div.innerHTML += `
+                <div>
+                    <label style="font-size:12px;">${layerName}</label><br>
+                    <input type="range" min="0" max="1" step="0.1" value="${layer.options.opacity || 1}"
+                        class="opacity-slider" 
+                        id="op_${id}"
+                        onchange="overlayMaps['${layerName}'].setOpacity(this.value)">
+                </div><hr style="margin: 5px 0;">
+            `;
+            });
+
+            return div;
+        };
+
+        opacityControl.addTo(map);
+
+        function getFeatureInfoUrl(baseUrl, layers, latlng, params) {
+            var point = map.latLngToContainerPoint(latlng, map.getZoom());
+            var size = map.getSize();
+
+            var defaultParams = {
+                request: "GetFeatureInfo",
+                service: "WMS",
+                srs: "EPSG:4326",
+                styles: "",
+                transparent: true,
+                version: "1.1.0",
+                format: "image/png",
+                bbox: map.getBounds().toBBoxString(),
+                height: size.y,
+                width: size.x,
+                layers: layers,
+                query_layers: layers,
+                info_format: "application/json"
+            };
+
+            params = L.extend(defaultParams, params || {});
+            params["x"] = Math.round(point.x);
+            params["y"] = Math.round(point.y);
+
+            return baseUrl + L.Util.getParamString(params, baseUrl, true);
+        }
+
+    </script>
+</body>
+
+</html>
